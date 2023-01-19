@@ -1,0 +1,35 @@
+#!/bin/sh
+#estraggo il nome del cluster
+cluster_api_name=$(/usr/local/bin/oc config view --minify -o jsonpath='{.clusters[].name}')
+if [[ $cluster_api_name == "api-osdr-ocp-site:6443" || $cluster_api_name == "api-ospippodr-ocp-site:6443" ]]; 
+	then type="dr" 
+    else type="primario"	
+fi
+
+#estraggo il nome dell'ultimo report e lo stampo in yaml
+report_name=$(/usr/local/bin/oc get reports -n kasten-io --sort-by={metadata.creationTimestamp} | tail -n 1 | awk '/^scheduled/{print $1}')
+/usr/local/bin/oc get reports $report_name -n kasten-io -o yaml > /tmp/lastk10report.yaml
+
+#creo il corpo della mail
+/usr/bin/echo -e "Ecco il report per $cluster_api_name di tipo $type:\n" > /tmp/lastk10.txt
+/usr/local/bin/yq '.spec' /tmp/lastk10report.yaml >> /tmp/lastk10.txt
+
+if [[ $type == "primario" ]]; then 
+#inizio parte siti primari
+/usr/bin/echo -e "\nEd ecco lo stato delle applicazioni:\n " >> /tmp/lastk10.txt
+/usr/local/bin/yq '.results.compliance' /tmp/lastk10report.yaml >> /tmp/lastk10.txt
+#fine parte siti primari
+elif [[ $type == "dr" ]]; then
+#inizio parte siti DR
+/usr/bin/echo -e "\nEd ecco lo stato delle importazioni/restore:\n " >> /tmp/lastk10.txt
+/usr/bin/echo -e "Import: " >> /tmp/lastk10.txt
+/usr/local/bin/yq '.results.actions.countStats.import' /tmp/lastk10report.yaml >> /tmp/lastk10.txt
+/usr/bin/echo -e "\nRestore: " >> /tmp/lastk10.txt
+/usr/local/bin/yq '.results.actions.countStats.restore' /tmp/lastk10report.yaml >> /tmp/lastk10.txt
+#fine parte siti DR
+fi
+
+/usr/bin/echo -e "\nVisualizzare l'allegato yaml per maggiori dettagli" >> /tmp/lastk10.txt
+
+#spedisco e allego lo yaml
+/usr/bin/mailx -a /tmp/lastk10report.yaml -s "Rapporto quotidiano Kasten per il cluster $cluster_api_name" info@info.it < /tmp/lastk10.txt
