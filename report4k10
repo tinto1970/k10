@@ -1,35 +1,46 @@
 #!/bin/sh
-#estraggo il nome del cluster
+#version 2.3
+#usage: ./report4k10 indirizzo@mail.com
+email=$1
+# Check if the email address is valid
+if ! [[ "$email" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+    echo "Error: invalid email. Usage: ./report4k10 indirizzo@mail.com"
+    exit 1
+fi
+#get cluster name
 cluster_api_name=$(/usr/local/bin/oc config view --minify -o jsonpath='{.clusters[].name}')
-if [[ $cluster_api_name == "api-osdr-ocp-site:6443" || $cluster_api_name == "api-ospippodr-ocp-site:6443" ]]; 
-	then type="dr" 
-    else type="primario"	
+if [[ $cluster_api_name == "apiurl1:6443" || $cluster_api_name == "apiusrl2:6443" ]];
+        then type="dr"
+    else type="primary"
 fi
 
-#estraggo il nome dell'ultimo report e lo stampo in yaml
+cluster_name=$(echo $cluster_api_name | cut -d'-' -f2)
+cluster_name_capital=$(echo $cluster_name | tr '[:lower:]' '[:upper:]')
+
+#get last report name
 report_name=$(/usr/local/bin/oc get reports -n kasten-io --sort-by={metadata.creationTimestamp} | tail -n 1 | awk '/^scheduled/{print $1}')
-/usr/local/bin/oc get reports $report_name -n kasten-io -o yaml > /tmp/lastk10report.yaml
+/usr/local/bin/oc get reports $report_name -n kasten-io -o yaml > /tmp/lastreport.yaml
 
-#creo il corpo della mail
-/usr/bin/echo -e "Ecco il report per $cluster_api_name di tipo $type:\n" > /tmp/lastk10.txt
-/usr/local/bin/yq '.spec' /tmp/lastk10report.yaml >> /tmp/lastk10.txt
+#create mail bod
+/usr/bin/echo -en "Report for $cluster_name_capital type $type date " > /tmp/last.txt
+timestamp=$(/usr/local/bin/yq '.spec.reportTimestamp' /tmp/lastreport.yaml)
+data=${timestamp:0:-10}
+echo $data >> /tmp/last.txt
 
-if [[ $type == "primario" ]]; then 
-#inizio parte siti primari
-/usr/bin/echo -e "\nEd ecco lo stato delle applicazioni:\n " >> /tmp/lastk10.txt
-/usr/local/bin/yq '.results.compliance' /tmp/lastk10report.yaml >> /tmp/lastk10.txt
-#fine parte siti primari
+if [[ $type == "primary" ]]; then
+/usr/bin/echo -e "\nStato delle applicazioni su Kasten (piu' dettagli nell'allegato yaml) :\n " >> /tmp/last.txt
+/usr/local/bin/yq '.results.compliance' /tmp/lastk10report.yaml >> /tmp/last.txt
 elif [[ $type == "dr" ]]; then
-#inizio parte siti DR
-/usr/bin/echo -e "\nEd ecco lo stato delle importazioni/restore:\n " >> /tmp/lastk10.txt
-/usr/bin/echo -e "Import: " >> /tmp/lastk10.txt
-/usr/local/bin/yq '.results.actions.countStats.import' /tmp/lastk10report.yaml >> /tmp/lastk10.txt
-/usr/bin/echo -e "\nRestore: " >> /tmp/lastk10.txt
-/usr/local/bin/yq '.results.actions.countStats.restore' /tmp/lastk10report.yaml >> /tmp/lastk10.txt
-#fine parte siti DR
+/usr/bin/echo -e "\nStato delle importazioni/restore su Kasten:\n " >> /tmp/last.txt
+/usr/bin/echo -e "Import: " >> /tmp/last.txt
+/usr/local/bin/yq '.results.actions.countStats.import' /tmp/lastreport.yaml >> /tmp/last.txt
+/usr/bin/echo -e "\nRestore: " >> /tmp/last.txt
+/usr/local/bin/yq '.results.actions.countStats.restore' /tmp/lastreport.yaml >> /tmp/last.txt
 fi
 
-/usr/bin/echo -e "\nVisualizzare l'allegato yaml per maggiori dettagli" >> /tmp/lastk10.txt
+#cleaning last.txt
+sed -i 's/[^[:print:]]//g' /tmp/last.txt
+sed -i "s/\r//g" /tmp/last.txt
 
-#spedisco e allego lo yaml
-/usr/bin/mailx -a /tmp/lastk10report.yaml -s "Rapporto quotidiano Kasten per il cluster $cluster_api_name" info@info.it < /tmp/lastk10.txt
+#send
+/usr/bin/mailx -a /tmp/lastreport.yaml -a /tmp/last.txt -r sender@mail.com -s "Daily report for cluster $cluster_name_capital" "$email" < /tmp/last.txt
